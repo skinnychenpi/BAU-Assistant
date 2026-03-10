@@ -1,0 +1,64 @@
+Dag ID: data_data_pltingestion_email_demo_linear_dag
+Dag Run ID: scheduled__2026-02-25T18:00:00+00:00 	 failed 	 Dag Run Link Click Here
+Start date: 2026-02-26 01:59:49 SGT
+Duration: 00:01:58 (avg:00:03:54)
+	 Task ID: collect 	 failed
+	 Task ID: parse 	 upstream_failed
+Dag ID: data_data_pltingestion_email_demo_linear_dag
+Dag Run ID: scheduled__2026-02-26T18:00:00+00:00 	 failed 	 Dag Run Link Click Here
+Start date: 2026-02-27 01:59:49 SGT
+Duration: 00:01:59 (avg:00:03:54)
+	 Task ID: collect 	 failed
+	 Task ID: parse 	 upstream_failed
+Dag ID: data_data_pltingestion_email_demo_fork_dag
+Dag Run ID: scheduled__2026-02-25T18:00:00+00:00 	 failed 	 Dag Run Link Click Here
+Start date: 2026-02-26 01:59:49 SGT
+Duration: 00:11:00 (avg:00:06:01)
+	 Task ID: item_1_collect 	 failed
+	 Task ID: item_1_upload 	 failed
+	 Task ID: item_2_collect 	 failed
+	 Task ID: item_1_cook 	 upstream_failed
+	 Task ID: item_2_upload 	 failed
+	 Task ID: item_3_collect 	 failed
+	 Task ID: item_3_upload 	 failed
+	 Task ID: item_4_collect 	 failed
+	 Task ID: item_3_cook 	 upstream_failed
+	 Task ID: item_4_upload 	 failed
+	 Task ID: send_time_tracing_message 	 failed
+Dag ID: data_data_pltingestion_email_demo_fork_dag
+Dag Run ID: scheduled__2026-02-26T18:00:00+00:00 	 failed 	 Dag Run Link Click Here
+Start date: 2026-02-27 01:59:49 SGT
+Duration: 00:11:00 (avg:00:06:01)
+	 Task ID: item_1_collect 	 failed
+	 Task ID: item_1_upload 	 failed
+	 Task ID: item_2_collect 	 failed
+	 Task ID: item_1_cook 	 upstream_failed
+	 Task ID: item_2_upload 	 failed
+	 Task ID: item_3_collect 	 failed
+	 Task ID: item_3_upload 	 failed
+	 Task ID: item_4_collect 	 failed
+	 Task ID: item_3_cook 	 upstream_failed
+	 Task ID: item_4_upload 	 failed
+	 Task ID: send_time_tracing_message 	 failed
+Dag ID: data_data_pltingestion_email_demo_taskgroup_dag
+Dag Run ID: scheduled__2026-02-25T18:00:00+00:00 	 failed 	 Dag Run Link Click Here
+Start date: 2026-02-26 01:59:49 SGT
+Duration: 00:02:00 (avg:00:03:57)
+	 Task ID: game_1.game_1_collect 	 failed
+	 Task ID: game_1.game_1_parse 	 upstream_failed
+	 Task ID: game_2.game_2_collect 	 failed
+	 Task ID: game_2.game_2_parse 	 upstream_failed
+	 Task ID: game_3.game_3_collect 	 failed
+	 Task ID: game_3.game_3_parse 	 upstream_failed
+	 Task ID: end 	 upstream_failed
+Dag ID: data_data_pltingestion_email_demo_taskgroup_dag
+Dag Run ID: scheduled__2026-02-26T18:00:00+00:00 	 failed 	 Dag Run Link Click Here
+Start date: 2026-02-27 01:59:49 SGT
+Duration: 00:02:00 (avg:00:03:57)
+	 Task ID: game_1.game_1_collect 	 failed
+	 Task ID: game_1.game_1_parse 	 upstream_failed
+	 Task ID: game_2.game_2_collect 	 failed
+	 Task ID: game_2.game_2_parse 	 upstream_failed
+	 Task ID: game_3.game_3_collect 	 failed
+	 Task ID: game_3.game_3_parse 	 upstream_failed
+	 Task ID: end 	 upstream_failed
