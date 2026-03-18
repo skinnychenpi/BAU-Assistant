@@ -237,96 +237,152 @@ Agent Loop 限制：MAX_STEPS = 10，防止无限循环。
 | 决策 | 选择 | 放弃 | 原因 |
 |------|------|------|------|
 | 邮件解析 | Regex | LLM | 格式固定，LLM 是杀鸡用牛刀 |
-| 状态持久化 | SQLite | 纯内存 | 支持跨进程 human-in-the-loop |
+| 状态持久化 | SQLite | 纯内存 / PostgreSQL | 支持跨进程 human-in-the-loop；单服务器，少量用户 |
 | Agent 框架 | 原生 Anthropic Tool Use | LangChain | 学习底层机制 |
 | 自主性边界 | Analyze 自动，Execute 需确认 | 全自动 | 生产操作需要人工把关 |
 | 上下文策略 | Guided（预取 + 按需） | 全自主 | 节省 2 次 LLM 往返，log + 历史总是需要的 |
 | 日志模块设计 | 3 个独立模块 + 路由器 | 单一整体工具 | 职责清晰，可测试，可扩展 |
 | DAG 元数据 | 仓库内 YAML 配置文件 | Confluence 索引页 | 版本控制，无需 API 调用获取映射 |
 | AI 复杂度 | 中间层（LLM + 工具 + 提示词） | RAG / 模式匹配 | 处理重复模式能力强，新问题可升级给人工 |
+| 部署方式 | Docker + docker-compose | 裸机部署 | 一次测试，到处部署；方便团队成员使用 |
+| 调度方式 | APScheduler（进程内） | Celery / 外部 cron | 简单，无需额外基础设施 |
 
 ---
 
 ## 文件结构
 
 ```
-bau/
-├── __init__.py
-├── config.py                      # Pydantic 配置
-├── cli.py                         # CLI 入口 [Phase 3]
-├── orchestrator.py                # 主循环 [Phase 2]
+BAU-Assistant/
+├── Dockerfile                     # ✓ python:3.11-slim
+├── docker-compose.yml             # ✓ 数据卷、环境变量、重启策略
+├── .dockerignore                  # ✓ 排除测试、文档、密钥
+├── pyproject.toml                 # ✓ 所有依赖
+├── .env.example                   # ✓ 所有环境变量文档
 │
-├── ingestion/
+├── bau/
 │   ├── __init__.py
-│   ├── email_parser.py            # ✓ Regex 邮件解析
-│   ├── gmail_client.py            # Gmail API [Phase 1]
-│   └── gsheet_client.py           # Google Sheets API [Phase 2]
-│
-├── analysis/
-│   ├── __init__.py
-│   ├── agent.py                   # Tool-use 循环 [Phase 2]
-│   ├── prompts.py                 # 系统提示词 [Phase 2]
-│   └── tools/
+│   ├── config.py                  # ✓ Pydantic 配置
+│   ├── cli.py                     # ✓ CLI：run/status/approve/reject/serve
+│   ├── orchestrator.py            # ✓ 流水线主循环
+│   │
+│   ├── ingestion/
+│   │   ├── __init__.py
+│   │   ├── email_parser.py        # ✓ Regex 邮件解析
+│   │   ├── gmail_client.py        # Gmail API 封装 [Phase 3]
+│   │   └── gsheet_client.py       # ✓ Google Sheets API
+│   │
+│   ├── analysis/
+│   │   ├── __init__.py
+│   │   ├── agent.py               # ✓ Tool-use 循环（Guided 方案）
+│   │   ├── prompts.py             # ✓ 系统提示词 + 工具定义
+│   │   └── tools/
+│   │       ├── __init__.py
+│   │       ├── airflow_log_tool.py # ✓ Airflow 日志 + 预处理
+│   │       ├── yarn_log_tool.py    # ✓ YARN 日志（待 infra 确认）
+│   │       ├── log_router.py       # ✓ 日志源路由
+│   │       ├── gitlab_tool.py      # ✓ 任务代码 + DAG 定义
+│   │       ├── confluence_tool.py  # ✓ 通过 YAML 获取作业文档
+│   │       └── history_tool.py     # ✓ 从 GSheet 获取历史问题
+│   │
+│   ├── knowledge/
+│   │   ├── __init__.py
+│   │   ├── loader.py              # ✓ YAML 配置加载器
+│   │   └── dag_config.yaml        # ✓ DAG 元数据模板
+│   │
+│   ├── report/
+│   │   ├── __init__.py
+│   │   ├── generator.py           # ✓ 报告生成（payload + 文本）
+│   │   └── internal_api.py        # ✓ Mock API 客户端
+│   │
+│   └── state/
 │       ├── __init__.py
-│       ├── airflow_log_tool.py    # 从 Airflow 获取日志 [Phase 2]
-│       ├── yarn_log_tool.py       # 从 YARN 获取日志 [Phase 2]
-│       ├── log_router.py          # 路由到正确的日志源 [Phase 2]
-│       ├── gitlab_tool.py         # 任务代码 + DAG 定义 [Phase 2]
-│       ├── confluence_tool.py     # 通过 YAML 获取作业文档 [Phase 2]
-│       └── history_tool.py        # 从 GSheet 获取历史问题 [Phase 2]
+│       ├── models.py              # ✓ 数据模型
+│       └── store.py               # ✓ SQLite CRUD
 │
-├── knowledge/
-│   └── dag_config.yaml            # DAG 元数据：Confluence URL、
-│                                  # 任务类型、YARN 应用名
-│
-├── report/
-│   ├── __init__.py
-│   ├── generator.py               # DiagnosisResult → payload [Phase 2]
-│   └── internal_api.py            # Mock API 客户端 [Phase 2]
-│
-└── state/
+└── tests/                         # 85 个测试，全部通过
     ├── __init__.py
-    ├── models.py                  # ✓ 数据模型
-    └── store.py                   # ✓ SQLite CRUD
+    ├── conftest.py                # ✓ 共享 fixtures
+    ├── test_email_parser.py       # ✓ 8 个测试
+    ├── test_store.py              # ✓ 11 个测试
+    ├── test_log_tools.py          # ✓ 14 个测试
+    ├── test_knowledge_loader.py   # ✓ 7 个测试
+    ├── test_confluence_tool.py    # ✓ 10 个测试
+    ├── test_prompts.py            # ✓ 8 个测试
+    ├── test_agent.py              # ✓ 10 个测试
+    ├── test_history_tool.py       # ✓ 5 个测试
+    ├── test_report_generator.py   # ✓ 7 个测试
+    └── fixtures/
+        └── sample_email.txt       # ✓ 测试数据
 ```
+
+---
+
+## 部署
+
+Docker 部署到开发服务器（公司内网）。
+
+```bash
+# 构建
+docker compose build
+
+# 作为长驻服务运行（默认每 60 分钟）
+docker compose up -d
+
+# 手动触发流水线
+docker compose run --rm bau-assistant run
+
+# 查看待处理操作
+docker compose run --rm bau-assistant status
+
+# 审批 / 拒绝
+docker compose run --rm bau-assistant approve <action_id>
+docker compose run --rm bau-assistant reject <action_id>
+```
+
+数据卷：
+- `bau-data` — 持久化 SQLite 数据库
+- `./credentials` — OAuth 凭证文件（只读挂载）
+
+未来：FastAPI Web UI 供团队成员使用（Phase B）。
 
 ---
 
 ## 开发 Roadmap
 
-### Phase 1 — 数据层（进行中，部分完成）
-- ✓ `email_parser.py`：regex 解析 + 单元测试
-- ✓ `state/store.py`：SQLite schema + CRUD
+### Phase 1 — 数据层（已完成）
+- ✓ `email_parser.py`：regex 解析 + 8 个单元测试
+- ✓ `state/store.py`：SQLite schema + CRUD + 11 个单元测试
 - ✓ `state/models.py`：数据模型
+
+### Phase 2 — Agent Core（已完成）
+- ✓ 所有工具：airflow_log、yarn_log、log_router、gitlab、confluence、history
+- ✓ `agent.py`：Tool Use 循环（Guided 方案）
+- ✓ `prompts.py`：系统提示词 + 推理框架 + 工具定义
+- ✓ `report/generator.py` + `internal_api.py`：报告生成
+- ✓ `knowledge/loader.py` + `dag_config.yaml`：DAG 元数据
+- ✓ 77 个新单元测试（共 85 个，全部通过）
+
+### Phase 2.5 — Docker + CLI（已完成）
+- ✓ `Dockerfile` + `docker-compose.yml`：容器化部署
+- ✓ `cli.py`：run / status / approve / reject / serve
+- ✓ `orchestrator.py`：完整流水线循环
+- ✓ APScheduler 长驻服务模式
+
+### Phase 3 — 端到端集成（下一步）
 - `gmail_client.py`：Gmail API 封装
+- 接入真实 Airflow/YARN/GitLab/Confluence API
+- 审批后执行 Airflow rerun
+- 用真实数据端到端测试
 
-完成标准：给定一封邮件，输出结构化 `FailedTaskReport`
-
-### Phase 2 — Agent Core（下一步）
-- `dag_config.yaml`：DAG 元数据配置
-- `airflow_log_tool.py`：Airflow REST API 日志获取
-- `yarn_log_tool.py`：YARN ResourceManager API 日志获取
-- `log_router.py`：日志源路由
-- `gitlab_tool.py`：获取任务代码 + DAG 定义
-- `confluence_tool.py`：通过 YAML 映射获取作业文档
-- `gsheet_client.py` + `history_tool.py`：从 Google Sheets 获取历史问题
-- `agent.py`：Tool Use 循环（Guided 方案）
-- `prompts.py`：系统提示词 + 推理框架
-- `report/generator.py`：结构化报告生成
-- `report/internal_api.py`：mock
-- 所有新模块的单元测试
-
-完成标准：给定 `FailedTaskReport`，输出有 evidence 支撑的 `DiagnosisResult`
-
-### Phase 3 — Human-in-the-Loop
-- `cli.py`：run / status / approve / reject
-- `AWAIT_HUMAN` 状态持久化和恢复
-- Airflow rerun 真实调用
-
-完成标准：完整跑通端到端流程
+完成标准：在开发服务器上完整跑通端到端流程
 
 ### Phase 4 — 接真实 API（持续）
 - 接 Internal API（报告推送）
 - 接 Messaging API（通知 data source owner）
 - 基于实际使用迭代 prompt
 - 考虑 RAG 知识库以深入理解 Confluence/runbook
+
+### Phase B — Web UI（未来）
+- FastAPI 服务器 + REST 端点
+- Web UI 供团队成员查看状态、审批/拒绝操作
+- 向更多团队成员推广

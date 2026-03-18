@@ -159,6 +159,8 @@ IDLE → FETCH → ANALYZE → REPORT → AWAIT_HUMAN → EXECUTE → DONE
 6. **Independent modules with router**: separate airflow_log, yarn_log, and log_router modules (not monolithic)
 7. **YAML config for DAG metadata**: version-controlled mapping of dag_id → confluence URL, task types, YARN app names
 8. **Middle tier AI approach**: LLM + tools + prompt engineering (no RAG infrastructure yet)
+9. **Docker + SQLite (no PostgreSQL)**: single dev server, few users — SQLite is sufficient
+10. **APScheduler in-process**: simple cron-like scheduling, no external services (Celery/Redis)
 
 ## SQLite Schema
 ```sql
@@ -189,11 +191,41 @@ CREATE TABLE diagnosis_history (
 );
 ```
 
+## Deployment
+
+Docker-based deployment on dev server (company network).
+
+```bash
+# Build
+docker compose build
+
+# Run as long-running service (default: every 60 min)
+docker compose up -d
+
+# Manual pipeline run
+docker compose run --rm bau-assistant run
+
+# Check pending actions
+docker compose run --rm bau-assistant status
+
+# Approve / reject
+docker compose run --rm bau-assistant approve <action_id>
+docker compose run --rm bau-assistant reject <action_id>
+```
+
+Volumes:
+- `bau-data` — persistent SQLite DB
+- `./credentials` — OAuth credential files (mounted read-only, uncomment in docker-compose.yml)
+
+Future: FastAPI web UI for teammates (Phase B).
+
 ## Development Phases
-- **Phase 1 (partial)**: Data layer — email_parser ✓, state store ✓, gmail_client, gsheet_client
-- **Phase 2**: Agent Core — tools (airflow_log, yarn_log, log_router, gitlab, confluence, history), agent loop, prompts, report generator
-- **Phase 3**: Human-in-the-Loop — CLI, AWAIT_HUMAN state persistence, Airflow rerun
+- **Phase 1 (complete)**: Data layer — email_parser ✓, state store ✓, models ✓
+- **Phase 2 (complete)**: Agent Core — all tools ✓, agent loop ✓, prompts ✓, report generator ✓, 85 tests passing
+- **Phase 2.5 (complete)**: Docker + CLI — Dockerfile ✓, docker-compose ✓, orchestrator ✓, CLI (run/status/approve/reject/serve) ✓, APScheduler ✓
+- **Phase 3**: Gmail client, connect real Airflow/YARN/GitLab/Confluence APIs, end-to-end testing
 - **Phase 4**: Connect real Internal API, iterate on prompts, consider RAG for deeper knowledge
+- **Phase B (future)**: FastAPI web UI for teammates
 
 ## Email Sample Format
 ```

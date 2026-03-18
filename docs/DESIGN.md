@@ -264,108 +264,150 @@ Three tables:
 | Decision | Chosen | Rejected | Reason |
 |----------|--------|----------|--------|
 | Email parsing | Regex | LLM | Fixed format; LLM is overkill |
-| State persistence | SQLite | In-memory | Supports cross-process human-in-the-loop |
+| State persistence | SQLite | In-memory / PostgreSQL | Supports cross-process human-in-the-loop; single server, few users |
 | Agent framework | Native Anthropic Tool Use | LangChain | Learning the underlying mechanism |
 | Autonomy boundary | Analyze auto, Execute requires confirmation | Fully automatic | Production operations need human oversight |
 | Context strategy | Guided (pre-fetch + on-demand) | Fully autonomous | Saves 2 LLM round-trips, always need log + history |
 | Log module design | 3 independent modules + router | Single monolithic tool | Clean separation, testable, extensible |
 | DAG metadata | YAML config file in repo | Confluence index page | Version-controlled, no API call for mapping |
 | AI complexity tier | Middle (LLM + tools + prompts) | RAG / pattern matching | Handles repetitive patterns well, escalates novel issues |
+| Deployment | Docker + docker-compose | Bare metal | Test once, deploy anywhere; easy for teammates |
+| Scheduling | APScheduler (in-process) | Celery / external cron | Simple, no extra infrastructure needed |
 
 ---
 
 ## File Structure
 
 ```
-bau/
-├── __init__.py
-├── config.py                      # Pydantic settings
-├── cli.py                         # CLI entry point [Phase 3]
-├── orchestrator.py                # Main loop [Phase 2]
+BAU-Assistant/
+├── Dockerfile                     # ✓ python:3.11-slim
+├── docker-compose.yml             # ✓ volumes, env, restart policy
+├── .dockerignore                  # ✓ excludes tests, docs, secrets
+├── pyproject.toml                 # ✓ all dependencies
+├── .env.example                   # ✓ all env vars documented
 │
-├── ingestion/
+├── bau/
 │   ├── __init__.py
-│   ├── email_parser.py            # ✓ Regex email parsing
-│   ├── gmail_client.py            # Gmail API wrapper [Phase 1]
-│   └── gsheet_client.py           # Google Sheets API [Phase 2]
-│
-├── analysis/
-│   ├── __init__.py
-│   ├── agent.py                   # Tool-use loop [Phase 2]
-│   ├── prompts.py                 # System prompt [Phase 2]
-│   └── tools/
+│   ├── config.py                  # ✓ Pydantic settings
+│   ├── cli.py                     # ✓ CLI: run/status/approve/reject/serve
+│   ├── orchestrator.py            # ✓ Pipeline loop
+│   │
+│   ├── ingestion/
+│   │   ├── __init__.py
+│   │   ├── email_parser.py        # ✓ Regex email parsing
+│   │   ├── gmail_client.py        # Gmail API wrapper [Phase 3]
+│   │   └── gsheet_client.py       # ✓ Google Sheets API
+│   │
+│   ├── analysis/
+│   │   ├── __init__.py
+│   │   ├── agent.py               # ✓ Tool-use loop (guided)
+│   │   ├── prompts.py             # ✓ System prompt + tool defs
+│   │   └── tools/
+│   │       ├── __init__.py
+│   │       ├── airflow_log_tool.py # ✓ Airflow log + pre-processing
+│   │       ├── yarn_log_tool.py    # ✓ YARN log (pending infra)
+│   │       ├── log_router.py       # ✓ Route to correct log source
+│   │       ├── gitlab_tool.py      # ✓ Task code + DAG definition
+│   │       ├── confluence_tool.py  # ✓ Job runbook via YAML
+│   │       └── history_tool.py     # ✓ Historical issues from GSheet
+│   │
+│   ├── knowledge/
+│   │   ├── __init__.py
+│   │   ├── loader.py              # ✓ YAML config loader
+│   │   └── dag_config.yaml        # ✓ DAG metadata template
+│   │
+│   ├── report/
+│   │   ├── __init__.py
+│   │   ├── generator.py           # ✓ Payload + text report
+│   │   └── internal_api.py        # ✓ Mock API client
+│   │
+│   └── state/
 │       ├── __init__.py
-│       ├── airflow_log_tool.py    # Fetch log from Airflow [Phase 2]
-│       ├── yarn_log_tool.py       # Fetch log from YARN [Phase 2]
-│       ├── log_router.py          # Route to correct log source [Phase 2]
-│       ├── gitlab_tool.py         # Task code + DAG definition [Phase 2]
-│       ├── confluence_tool.py     # Job runbook via YAML [Phase 2]
-│       └── history_tool.py        # Historical issues from GSheet [Phase 2]
+│       ├── models.py              # ✓ Data models
+│       └── store.py               # ✓ SQLite CRUD
 │
-├── knowledge/
-│   └── dag_config.yaml            # DAG metadata: confluence URLs,
-│                                  # task types, YARN app names
-│
-├── report/
-│   ├── __init__.py
-│   ├── generator.py               # DiagnosisResult → payload [Phase 2]
-│   └── internal_api.py            # Mock API client [Phase 2]
-│
-└── state/
+└── tests/                         # 85 tests, all passing
     ├── __init__.py
-    ├── models.py                  # ✓ Data models
-    └── store.py                   # ✓ SQLite CRUD
-
-tests/
-├── __init__.py
-├── conftest.py                    # Shared fixtures [Phase 2]
-├── test_email_parser.py           # ✓ 8 passing tests
-├── test_store.py                  # [Phase 2]
-├── test_log_router.py             # [Phase 2]
-├── test_airflow_log_tool.py       # [Phase 2]
-├── test_yarn_log_tool.py          # [Phase 2]
-├── test_agent.py                  # [Phase 2]
-└── fixtures/
-    └── sample_email.txt           # ✓ Test fixture
+    ├── conftest.py                # ✓ Shared fixtures
+    ├── test_email_parser.py       # ✓ 8 tests
+    ├── test_store.py              # ✓ 11 tests
+    ├── test_log_tools.py          # ✓ 14 tests
+    ├── test_knowledge_loader.py   # ✓ 7 tests
+    ├── test_confluence_tool.py    # ✓ 10 tests
+    ├── test_prompts.py            # ✓ 8 tests
+    ├── test_agent.py              # ✓ 10 tests
+    ├── test_history_tool.py       # ✓ 5 tests
+    ├── test_report_generator.py   # ✓ 7 tests
+    └── fixtures/
+        └── sample_email.txt       # ✓ Test fixture
 ```
+
+---
+
+## Deployment
+
+Docker-based deployment on dev server (company network).
+
+```bash
+# Build
+docker compose build
+
+# Run as long-running service (default: every 60 min)
+docker compose up -d
+
+# Manual pipeline run
+docker compose run --rm bau-assistant run
+
+# Check pending actions
+docker compose run --rm bau-assistant status
+
+# Approve / reject
+docker compose run --rm bau-assistant approve <action_id>
+docker compose run --rm bau-assistant reject <action_id>
+```
+
+Volumes:
+- `bau-data` — persistent SQLite DB
+- `./credentials` — OAuth credential files (mounted read-only)
 
 ---
 
 ## Development Roadmap
 
-### Phase 1 — Data Layer (partial, in progress)
-- ✓ `email_parser.py`: regex parsing + unit tests
-- ✓ `state/store.py`: SQLite schema + CRUD
+### Phase 1 — Data Layer (complete)
+- ✓ `email_parser.py`: regex parsing + 8 unit tests
+- ✓ `state/store.py`: SQLite schema + CRUD + 11 unit tests
 - ✓ `state/models.py`: data models
+
+### Phase 2 — Agent Core (complete)
+- ✓ All tools: airflow_log, yarn_log, log_router, gitlab, confluence, history
+- ✓ `agent.py`: Tool Use loop (guided approach)
+- ✓ `prompts.py`: system prompt + reasoning framework + tool definitions
+- ✓ `report/generator.py` + `internal_api.py`: report generation
+- ✓ `knowledge/loader.py` + `dag_config.yaml`: DAG metadata
+- ✓ 77 new unit tests (85 total, all passing)
+
+### Phase 2.5 — Docker + CLI (complete)
+- ✓ `Dockerfile` + `docker-compose.yml`: containerized deployment
+- ✓ `cli.py`: run / status / approve / reject / serve
+- ✓ `orchestrator.py`: full pipeline loop
+- ✓ APScheduler for long-running service mode
+
+### Phase 3 — End-to-End Integration (next)
 - `gmail_client.py`: Gmail API wrapper
+- Connect real Airflow/YARN/GitLab/Confluence APIs
+- Airflow rerun execution after approval
+- End-to-end testing with real data
 
-Completion criteria: given an email, output a structured `FailedTaskReport`
+Completion criteria: full end-to-end flow runs successfully on dev server
 
-### Phase 2 — Agent Core (next)
-- `dag_config.yaml`: DAG metadata configuration
-- `airflow_log_tool.py`: Airflow REST API log fetching
-- `yarn_log_tool.py`: YARN ResourceManager API log fetching
-- `log_router.py`: route to correct log source
-- `gitlab_tool.py`: fetch task code + DAG definition
-- `confluence_tool.py`: fetch runbook via YAML mapping
-- `gsheet_client.py` + `history_tool.py`: historical issues from Google Sheets
-- `agent.py`: Tool Use loop (guided approach)
-- `prompts.py`: system prompt + reasoning framework
-- `report/generator.py`: structured report generation
-- `report/internal_api.py`: mock
-- Unit tests for all new modules
-
-Completion criteria: given a `FailedTaskReport`, output a `DiagnosisResult` supported by evidence
-
-### Phase 3 — Human-in-the-Loop
-- `cli.py`: run / status / approve / reject
-- `AWAIT_HUMAN` state persistence and recovery
-- Airflow rerun real API call
-
-Completion criteria: full end-to-end flow runs successfully
-
-### Phase 4 — Connect Real APIs (ongoing)
+### Phase 4 — Production APIs (ongoing)
 - Connect Internal API (report delivery)
 - Connect Messaging API (notify data source owners)
 - Iterate on prompts based on real usage
 - Consider RAG knowledge base for deeper Confluence/runbook understanding
+
+### Phase B — Web UI (future)
+- FastAPI server with REST endpoints
+- Web UI for teammates to view status, approve/reject actions
+- Share tool with wider team
