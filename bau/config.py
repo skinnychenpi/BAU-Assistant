@@ -3,6 +3,8 @@ Central configuration — all settings come from environment variables.
 Copy .env.example to .env and fill in your values.
 """
 
+from __future__ import annotations
+
 from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict

@@ -10,6 +10,8 @@ Requires in .env:
 
 from __future__ import annotations
 
+from __future__ import annotations
+
 import asyncio
 import sys
 from pathlib import Path
