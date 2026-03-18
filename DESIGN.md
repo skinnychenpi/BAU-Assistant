@@ -15,11 +15,15 @@
 |------|------|
 | 邮件来源 | Gmail，Airflow 每天自动发送 |
 | Airflow log 访问 | Airflow REST API |
+| Spark log 访问 | YARN ResourceManager REST API（待 infra 团队确认） |
 | 代码仓库 | 公司内网 self-hosted GitLab，有 API token |
+| 作业文档 | Confluence 页面，通过 YAML 配置映射 |
+| 历史问题 | Google Sheets，通过 Sheets API 访问 |
 | 报告推送 | 内部自建 REST API（目前先 mock） |
 | 消息通知 | 内部自建 REST API（目前先 mock） |
 | Agent 自主性 | 半自动：分析和 report 自动，重跑和发消息需人工确认 |
 | Airflow 重跑 | Agent 给方案，人工确认后执行 |
+| AI 方案选择 | 中间层：LLM + 工具 + 提示词工程（暂不用 RAG） |
 | 技术栈 | Python 为主 |
 
 ---
@@ -27,29 +31,107 @@
 ## 整体架构
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                        BAU-Assistant                            │
-│                                                                 │
-│   ┌─────────────┐    ┌─────────────────────────────────────┐   │
-│   │  Scheduler  │───▶│           Orchestrator              │   │
-│   │  (cron job) │    │        (Agent Core Loop)            │   │
-│   └─────────────┘    └──────────────┬──────────────────────┘   │
-│                                     │                           │
-│              ┌──────────────────────┼──────────────────────┐   │
-│              ▼                      ▼                       ▼   │
-│   ┌─────────────────┐  ┌─────────────────┐  ┌───────────────┐  │
-│   │  Ingestion      │  │  Analysis       │  │  Action       │  │
-│   │  Pipeline       │  │  Engine         │  │  Layer        │  │
-│   │                 │  │  (LLM Core)     │  │  (Human Loop) │  │
-│   └────────┬────────┘  └────────┬────────┘  └──────┬────────┘  │
-│            │                    │                   │           │
-└────────────┼────────────────────┼───────────────────┼───────────┘
-             │                    │                   │
-     ┌───────▼──────┐    ┌────────▼───────┐   ┌──────▼────────┐
-     │ Gmail API    │    │ GitLab API     │   │ Airflow API   │
-     │ Airflow API  │    │ Airflow Log API│   │ (trigger run) │
-     └──────────────┘    └────────────────┘   │ Internal API  │
-                                              └───────────────┘
+┌──────────────────────────────────────────────────────────────────────┐
+│                          BAU-Assistant                                │
+│                                                                      │
+│  ┌─────────────┐    ┌──────────────────────────────────────────┐    │
+│  │  Scheduler  │───▶│            Orchestrator                  │    │
+│  │  (cron job) │    │  1. 预取 log + 历史问题                     │    │
+│  └─────────────┘    │  2. 构建带上下文的初始 prompt                │    │
+│                     │  3. 运行 agent tool-use 循环               │    │
+│                     └──────────────────┬───────────────────────┘    │
+│                                        │                            │
+│         ┌──────────────────────────────┼──────────────────────┐     │
+│         ▼                              ▼                      ▼     │
+│  ┌──────────────┐  ┌──────────────────────────┐  ┌──────────────┐  │
+│  │  Ingestion   │  │   Analysis Engine        │  │   Action     │  │
+│  │  Pipeline    │  │   (LLM Core - Guided)    │  │   Layer      │  │
+│  │              │  │                          │  │  (Human Loop)│  │
+│  └──────┬───────┘  └──────────┬───────────────┘  └──────┬───────┘  │
+│         │                     │                         │           │
+└─────────┼─────────────────────┼─────────────────────────┼───────────┘
+          │                     │                         │
+  ┌───────▼──────┐   ┌─────────▼────────┐   ┌────────────▼──────────┐
+  │ Gmail API    │   │ GitLab API       │   │ Airflow API           │
+  │ GSheet API   │   │ Confluence API   │   │ (trigger rerun)       │
+  │ Airflow API  │   │ Airflow Log API  │   │ Internal API (mock)   │
+  │              │   │ YARN Log API     │   │                       │
+  └──────────────┘   └──────────────────┘   └───────────────────────┘
+```
+
+---
+
+## 知识管道（Guided 方案）
+
+Agent 使用 **Guided** 上下文策略，减少 LLM 往返次数：
+
+```
+Orchestrator 预取（总是需要的）:
+  ├── 任务日志（通过 log_router → Airflow 或 YARN）
+  └── 历史问题（通过 GSheet API）
+
+Agent 按需调用（自行决定）:
+  ├── get_source_code(dag_id, task_id) → GitLab 代码
+  ├── get_job_runbook(dag_id)          → Confluence 文档
+  └── get_full_log(dag_id, run_id, task_id) → 完整日志
+```
+
+知识来源:
+| 来源 | 内容 | 访问方式 | 是否预取 |
+|------|------|----------|----------|
+| Airflow 日志 | 运行时错误（bash/python 任务） | Airflow REST API | 是 |
+| YARN 日志 | 运行时错误（Spark cluster 模式） | YARN ResourceManager API | 是 |
+| Google Sheet | 历史问题与解决方案 | Google Sheets API | 是 |
+| GitLab 仓库 | 作业代码 + DAG 定义 | GitLab API | 否（按需） |
+| Confluence | 作业说明文档 | Confluence REST API | 否（按需） |
+
+---
+
+## 日志获取 — 双源架构
+
+Spark cluster 模式任务的日志在 YARN，不在 Airflow。三个独立模块处理：
+
+```
+log_router.py（模块3 — 调度器）
+    │
+    ├── 读取 dag_config.yaml
+    │   └── 判断任务类型：spark | bash | python
+    │
+    ├── bash/python ──► airflow_log_tool.py（模块1）
+    │                    └── Airflow REST API → 处理后的日志
+    │
+    └── spark ──────► yarn_log_tool.py（模块2）
+                       └── YARN ResourceManager API → 处理后的日志
+```
+
+- **`airflow_log_tool.py`** — 单一职责：从 Airflow REST API 获取日志
+- **`yarn_log_tool.py`** — 单一职责：从 YARN ResourceManager API 获取日志
+- **`log_router.py`** — 读取 YAML 配置，分发到正确的日志工具
+
+日志预处理（两个工具都执行）：
+- 提取异常信息
+- 提取堆栈跟踪
+- 保留最后 150 行
+- `get_full_log` 作为回退方案供 Agent 使用
+
+---
+
+## DAG 配置文件
+
+`bau/knowledge/dag_config.yaml` — 版本控制的 DAG 元数据：
+
+```yaml
+data_pltingestion_email_demo_linear_dag:
+  confluence_url: "https://confluence.yourco.com/pages/12345"
+  tasks:
+    collect:
+      type: spark              # spark | bash | python
+      yarn_app_name: "pltingestion_email_collect"
+    parse:
+      type: bash               # 日志在 Airflow
+    transform:
+      type: spark
+      yarn_app_name: "pltingestion_email_transform"
 ```
 
 ---
@@ -63,14 +145,14 @@
              │ cron trigger / manual trigger     │
              ▼                                   │
         ┌─────────┐                              │
-        │  FETCH  │  读 Gmail，解析失败作业列表       │
+        │  FETCH  │  读 Gmail，解析失败作业列表
         └────┬────┘                              │
              │ 无失败作业                          │
              ├──────────────────────────────────▶┘
              │ 有失败作业
              ▼
         ┌─────────┐
-        │ ANALYZE │  拉 Log + GitLab 代码，LLM 诊断
+        │ ANALYZE │  预取 log + 历史问题，运行 Agent
         └────┬────┘
              ▼
         ┌─────────┐
@@ -119,11 +201,17 @@ Duration: 00:01:58 (avg:00:03:54)
 
 ### Module 2 — Analysis Engine（LLM 唯一使用处）
 
-工具集：
+**Guided 方案**：Orchestrator 预取 log + 历史问题，Agent 按需调用其他工具。
+
+预取上下文（总是包含）：
+- 任务日志（通过 log_router → Airflow 或 YARN）
+- 历史问题（通过 GSheet API）
+
+按需工具（Agent 自行决定）：
 ```
-get_airflow_log(dag_id, run_id, task_id)  → log text
-get_gitlab_file(dag_id, task_id)          → 代码内容
-get_historical_failures(dag_id)           → 历史失败记录
+get_source_code(dag_id, task_id)        → GitLab 任务代码 + DAG 定义
+get_job_runbook(dag_id)                 → Confluence 页面（通过 YAML 映射）
+get_full_log(dag_id, run_id, task_id)   → 完整日志（回退方案）
 ```
 
 诊断分类：
@@ -140,7 +228,7 @@ Agent Loop 限制：MAX_STEPS = 10，防止无限循环。
 三张表：
 - `agent_runs`：每次运行主记录
 - `pending_actions`：待确认的操作
-- `diagnosis_history`：历史诊断（用于 get_historical_failures）
+- `diagnosis_history`：历史诊断
 
 ---
 
@@ -152,28 +240,85 @@ Agent Loop 限制：MAX_STEPS = 10，防止无限循环。
 | 状态持久化 | SQLite | 纯内存 | 支持跨进程 human-in-the-loop |
 | Agent 框架 | 原生 Anthropic Tool Use | LangChain | 学习底层机制 |
 | 自主性边界 | Analyze 自动，Execute 需确认 | 全自动 | 生产操作需要人工把关 |
+| 上下文策略 | Guided（预取 + 按需） | 全自主 | 节省 2 次 LLM 往返，log + 历史总是需要的 |
+| 日志模块设计 | 3 个独立模块 + 路由器 | 单一整体工具 | 职责清晰，可测试，可扩展 |
+| DAG 元数据 | 仓库内 YAML 配置文件 | Confluence 索引页 | 版本控制，无需 API 调用获取映射 |
+| AI 复杂度 | 中间层（LLM + 工具 + 提示词） | RAG / 模式匹配 | 处理重复模式能力强，新问题可升级给人工 |
+
+---
+
+## 文件结构
+
+```
+bau/
+├── __init__.py
+├── config.py                      # Pydantic 配置
+├── cli.py                         # CLI 入口 [Phase 3]
+├── orchestrator.py                # 主循环 [Phase 2]
+│
+├── ingestion/
+│   ├── __init__.py
+│   ├── email_parser.py            # ✓ Regex 邮件解析
+│   ├── gmail_client.py            # Gmail API [Phase 1]
+│   └── gsheet_client.py           # Google Sheets API [Phase 2]
+│
+├── analysis/
+│   ├── __init__.py
+│   ├── agent.py                   # Tool-use 循环 [Phase 2]
+│   ├── prompts.py                 # 系统提示词 [Phase 2]
+│   └── tools/
+│       ├── __init__.py
+│       ├── airflow_log_tool.py    # 从 Airflow 获取日志 [Phase 2]
+│       ├── yarn_log_tool.py       # 从 YARN 获取日志 [Phase 2]
+│       ├── log_router.py          # 路由到正确的日志源 [Phase 2]
+│       ├── gitlab_tool.py         # 任务代码 + DAG 定义 [Phase 2]
+│       ├── confluence_tool.py     # 通过 YAML 获取作业文档 [Phase 2]
+│       └── history_tool.py        # 从 GSheet 获取历史问题 [Phase 2]
+│
+├── knowledge/
+│   └── dag_config.yaml            # DAG 元数据：Confluence URL、
+│                                  # 任务类型、YARN 应用名
+│
+├── report/
+│   ├── __init__.py
+│   ├── generator.py               # DiagnosisResult → payload [Phase 2]
+│   └── internal_api.py            # Mock API 客户端 [Phase 2]
+│
+└── state/
+    ├── __init__.py
+    ├── models.py                  # ✓ 数据模型
+    └── store.py                   # ✓ SQLite CRUD
+```
 
 ---
 
 ## 开发 Roadmap
 
-### Phase 1 — 数据层（Week 1）
-- `email_parser.py`：regex 解析 + 单元测试
-- `airflow_tool.py`：REST API 封装，能拉 log
-- `gitlab_tool.py`：根据 dag_id 找代码文件
-- `state/store.py`：SQLite schema + CRUD
+### Phase 1 — 数据层（进行中，部分完成）
+- ✓ `email_parser.py`：regex 解析 + 单元测试
+- ✓ `state/store.py`：SQLite schema + CRUD
+- ✓ `state/models.py`：数据模型
+- `gmail_client.py`：Gmail API 封装
 
-完成标准：给定一封邮件，输出结构化 `FailedTaskReport`，并能拉到每个 failed task 的 log
+完成标准：给定一封邮件，输出结构化 `FailedTaskReport`
 
-### Phase 2 — Agent Core（Week 2）
-- `agent.py`：Tool Use loop
-- `prompts.py`：诊断 prompt
+### Phase 2 — Agent Core（下一步）
+- `dag_config.yaml`：DAG 元数据配置
+- `airflow_log_tool.py`：Airflow REST API 日志获取
+- `yarn_log_tool.py`：YARN ResourceManager API 日志获取
+- `log_router.py`：日志源路由
+- `gitlab_tool.py`：获取任务代码 + DAG 定义
+- `confluence_tool.py`：通过 YAML 映射获取作业文档
+- `gsheet_client.py` + `history_tool.py`：从 Google Sheets 获取历史问题
+- `agent.py`：Tool Use 循环（Guided 方案）
+- `prompts.py`：系统提示词 + 推理框架
 - `report/generator.py`：结构化报告生成
 - `report/internal_api.py`：mock
+- 所有新模块的单元测试
 
 完成标准：给定 `FailedTaskReport`，输出有 evidence 支撑的 `DiagnosisResult`
 
-### Phase 3 — Human-in-the-Loop（Week 3）
+### Phase 3 — Human-in-the-Loop
 - `cli.py`：run / status / approve / reject
 - `AWAIT_HUMAN` 状态持久化和恢复
 - Airflow rerun 真实调用
@@ -184,3 +329,4 @@ Agent Loop 限制：MAX_STEPS = 10，防止无限循环。
 - 接 Internal API（报告推送）
 - 接 Messaging API（通知 data source owner）
 - 基于实际使用迭代 prompt
+- 考虑 RAG 知识库以深入理解 Confluence/runbook
