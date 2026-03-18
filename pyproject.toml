@@ -29,6 +29,7 @@ dependencies = [
     # Utils
     "python-dateutil>=2.9.0",
     "pyyaml>=6.0.0",
+    "python-dotenv>=1.0.0",
 ]
 
 [project.optional-dependencies]
@@ -42,6 +43,9 @@ dev = [
 
 [project.scripts]
 bau = "bau.cli:app"
+
+[tool.setuptools.packages.find]
+include = ["bau*"]
 
 [tool.ruff]
 line-length = 100
