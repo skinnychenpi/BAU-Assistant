@@ -1,0 +1,21 @@
+services:
+  bau-assistant:
+    build: .
+    container_name: bau-assistant
+    restart: unless-stopped
+    env_file:
+      - path: .env
+        required: false
+    volumes:
+      # SQLite DB (persistent)
+      - bau-data:/app/data
+      # Uncomment below when credentials are set up:
+      # - ./credentials:/app/credentials:ro
+    environment:
+      # Override DB path to use the persistent volume
+      - BAU_STATE_DB_PATH=/app/data/bau_state.db
+      # Override DAG config path
+      - DAG_CONFIG_PATH=/app/bau/knowledge/dag_config.yaml
+
+volumes:
+  bau-data:

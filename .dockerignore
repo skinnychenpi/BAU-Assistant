@@ -1,0 +1,40 @@
+# Git
+.git/
+.gitignore
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+
+# Env & secrets
+.env
+credentials/
+
+# DB (will be in volume)
+*.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+
+# Docker
+Dockerfile
+docker-compose.yml
+
+# Docs (not needed in image)
+docs/
+DESIGN.md
+CLAUDE.md
+
+# Tests (not needed in production image)
+tests/
+.pytest_cache/
