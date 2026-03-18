@@ -1,0 +1,20 @@
+# DAG Configuration — maps dag_id to metadata used by tools.
+#
+# Each DAG entry can have:
+#   confluence_url: URL to the Confluence runbook page
+#   tasks:
+#     <task_id>:
+#       type: spark | bash | python   (determines log source)
+#       yarn_app_name: <name>          (required if type == spark)
+#
+# Example:
+# data_pltingestion_email_demo_linear_dag:
+#   confluence_url: "https://confluence.yourco.com/pages/12345"
+#   tasks:
+#     collect:
+#       type: spark
+#       yarn_app_name: "pltingestion_email_collect"
+#     parse:
+#       type: bash
+
+# ── Add your DAG configurations below ─────────────────────────────────────────
