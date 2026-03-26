@@ -17,10 +17,16 @@ class Settings(BaseSettings):
         case_sensitive=False,
     )
 
-    # ── Anthropic ──────────────────────────────────────────────────────────────
+    # ── SMART Platform ────────────────────────────────────────────────────────
+    smart_api_url: str = "https://smart.shopee.io/apis/smart/v1/orchestrator/deployments/invoke"
+    smart_hash_id: str = ""
+    smart_endpoint_key: str = ""
+    smart_user_id: str = "bau-assistant"
+    agent_max_steps: int = 5
+
+    # ── Anthropic (legacy, kept for reference) ────────────────────────────────
     anthropic_api_key: str = ""
     anthropic_model: str = "claude-sonnet-4-20250514"
-    agent_max_steps: int = 10
 
     # ── Gmail ──────────────────────────────────────────────────────────────────
     gmail_credentials_path: str = "./credentials/gmail_credentials.json"

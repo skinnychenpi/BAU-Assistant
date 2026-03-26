@@ -1,8 +1,8 @@
 """
 Tests for analysis/agent.py — diagnosis parsing and tool dispatch.
 
-The actual LLM call is mocked. We test:
-1. JSON parsing of diagnosis responses
+The actual SMART API call is mocked. We test:
+1. JSON parsing of diagnosis responses (both direct and wrapped formats)
 2. Tool dispatch routing
 3. Edge cases (max steps, malformed JSON)
 """
@@ -36,6 +36,30 @@ class TestParseDiagnosis:
         assert len(result.evidence) == 1
         assert len(result.suggested_actions) == 1
         assert result.suggested_actions[0].action_type == "airflow_rerun"
+
+    def test_parses_final_answer_wrapper(self, sample_report):
+        """SMART agent responds with {"action": "final_answer", "diagnosis": {...}}"""
+        text = json.dumps({
+            "action": "final_answer",
+            "diagnosis": {
+                "root_cause_category": "network_error",
+                "confidence": 0.8,
+                "evidence": ["FTP timeout"],
+                "suggested_actions": [
+                    {
+                        "action_type": "airflow_rerun",
+                        "target": "run-1",
+                        "params": {},
+                        "reason": "Transient network issue",
+                    }
+                ],
+                "summary": "FTP server unreachable",
+            },
+        })
+        result = _parse_diagnosis(text, sample_report)
+        assert result.root_cause_category == "network_error"
+        assert result.confidence == 0.8
+        assert len(result.suggested_actions) == 1
 
     def test_parses_json_in_code_block(self, sample_report):
         text = '```json\n{"root_cause_category": "code_bug", "confidence": 0.7, "evidence": ["bug"], "suggested_actions": []}\n```'

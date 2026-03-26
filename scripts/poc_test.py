@@ -11,7 +11,7 @@ Usage:
     # From Airflow API:
     python -m scripts.poc_test --from-api
 
-Requires ANTHROPIC_API_KEY in .env (or environment).
+Requires SMART_HASH_ID and SMART_ENDPOINT_KEY in .env (or environment).
 """
 
 from __future__ import annotations

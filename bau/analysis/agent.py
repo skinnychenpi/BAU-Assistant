@@ -1,10 +1,14 @@
 """
-Core diagnosis agent — runs a Claude tool-use loop.
+Core diagnosis agent — runs a tool-use loop via SMART Platform API.
 
 Guided approach:
   - Orchestrator pre-fetches log + historical issues
   - Agent receives rich initial context
   - Agent can call additional tools on-demand (source code, runbook, full log)
+
+The SMART agent (GPT-4o-mini) responds with JSON:
+  - {"action": "call_tool", "tool": "...", "params": {...}} → we dispatch and continue
+  - {"action": "final_answer", "diagnosis": {...}} → we parse and return
 """
 
 from __future__ import annotations
@@ -12,15 +16,9 @@ from __future__ import annotations
 import json
 import logging
 import uuid
-from dataclasses import field
 
-import anthropic
-
-from bau.analysis.prompts import (
-    SYSTEM_PROMPT,
-    TOOL_DEFINITIONS,
-    build_initial_user_message,
-)
+from bau.analysis.prompts import build_initial_user_message
+from bau.analysis.smart_client import invoke as smart_invoke
 from bau.analysis.tools.airflow_log_tool import ProcessedLog, get_full_airflow_log
 from bau.analysis.tools.confluence_tool import get_job_runbook
 from bau.analysis.tools.gitlab_tool import get_source_code
@@ -59,9 +57,8 @@ async def _dispatch_tool(name: str, input_args: dict) -> str:
     return f"Unknown tool: {name}"
 
 
-def _parse_diagnosis(text: str, report: FailedTaskReport) -> DiagnosisResult:
-    """Parse the LLM's JSON response into a DiagnosisResult."""
-    # Extract JSON from the response (may be wrapped in markdown code block)
+def _extract_json(text: str) -> dict:
+    """Extract JSON from response text, handling markdown code blocks."""
     json_text = text
     if "```json" in text:
         start = text.index("```json") + 7
@@ -71,8 +68,16 @@ def _parse_diagnosis(text: str, report: FailedTaskReport) -> DiagnosisResult:
         start = text.index("```") + 3
         end = text.index("```", start)
         json_text = text[start:end]
+    return json.loads(json_text.strip())
 
-    data = json.loads(json_text.strip())
+
+def _parse_diagnosis(text: str, report: FailedTaskReport) -> DiagnosisResult:
+    """Parse the LLM's JSON response into a DiagnosisResult."""
+    data = _extract_json(text)
+
+    # Handle both direct diagnosis and wrapped {"action": "final_answer", "diagnosis": {...}}
+    if "action" in data and data["action"] == "final_answer":
+        data = data.get("diagnosis", data)
 
     actions = []
     for a in data.get("suggested_actions", []):
@@ -108,6 +113,9 @@ async def diagnose(
     The orchestrator pre-fetches log and historical issues,
     then calls this function.
 
+    Uses SMART Platform API (GPT-4o-mini) with thread-based
+    conversation for multi-turn tool-use loops.
+
     Args:
         report: The parsed failure report from email.
         log: Pre-fetched and pre-processed task log.
@@ -116,67 +124,106 @@ async def diagnose(
     Returns:
         DiagnosisResult with root cause, evidence, and suggested actions.
     """
-    client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
-
     # Build initial message with all pre-fetched context
     user_message = build_initial_user_message(report, log, historical_issues)
 
-    messages = [{"role": "user", "content": user_message}]
-    reasoning_trace: list[dict] = []
+    reasoning_trace = []
+    thread_id = None
 
     for step in range(settings.agent_max_steps):
         logger.info(f"Agent step {step + 1}/{settings.agent_max_steps}")
 
-        response = await client.messages.create(
-            model=settings.anthropic_model,
-            max_tokens=4096,
-            system=SYSTEM_PROMPT,
-            tools=TOOL_DEFINITIONS,
-            messages=messages,
+        # Call SMART API
+        smart_response = await smart_invoke(
+            message=user_message,
+            thread_id=thread_id,
         )
 
-        # Record this step in the reasoning trace
+        response_str = smart_response["response_str"]
+        thread_id = smart_response["thread_id"]
+
+        # Record this step
         reasoning_trace.append({
             "step": step + 1,
-            "stop_reason": response.stop_reason,
-            "content": [block.model_dump() for block in response.content],
+            "thread_id": thread_id,
+            "response": response_str,
         })
 
-        # If the model is done (no tool use), parse the final response
-        if response.stop_reason == "end_turn":
-            # Extract text from the response
-            text_parts = [
-                block.text for block in response.content if block.type == "text"
-            ]
-            full_text = "\n".join(text_parts)
+        # Parse the JSON response
+        try:
+            data = _extract_json(response_str)
+        except (json.JSONDecodeError, ValueError) as e:
+            logger.warning(f"Failed to parse JSON from response: {e}")
+            logger.debug(f"Raw response: {response_str}")
+            # Try to treat the whole response as a final answer
+            try:
+                result = _parse_diagnosis(response_str, report)
+                result.reasoning_trace = reasoning_trace
+                return result
+            except Exception:
+                # Continue to next step or bail out
+                user_message = (
+                    "Your response was not valid JSON. "
+                    "Please respond with a single JSON object as specified."
+                )
+                continue
 
-            result = _parse_diagnosis(full_text, report)
+        action = data.get("action", "final_answer")
+
+        # Final answer — parse and return
+        if action == "final_answer":
+            result = _parse_diagnosis(response_str, report)
             result.reasoning_trace = reasoning_trace
             return result
 
-        # Handle tool use
-        if response.stop_reason == "tool_use":
-            # Add assistant's response (with tool_use blocks) to messages
-            messages.append({"role": "assistant", "content": response.content})
+        # Tool call — dispatch and continue
+        if action == "call_tool":
+            tool_name = data.get("tool", "")
+            tool_params = data.get("params", {})
+            tool_reason = data.get("reason", "")
 
-            # Process each tool call
-            tool_results = []
-            for block in response.content:
-                if block.type == "tool_use":
-                    logger.info(f"Tool call: {block.name}({block.input})")
-                    try:
-                        result_text = await _dispatch_tool(block.name, block.input)
-                    except Exception as e:
-                        logger.error(f"Tool error: {e}")
-                        result_text = f"Error calling {block.name}: {e}"
+            logger.info(f"Tool call: {tool_name}({tool_params}) — {tool_reason}")
 
-                    tool_results.append({
-                        "type": "tool_result",
-                        "tool_use_id": block.id,
-                        "content": result_text,
-                    })
+            try:
+                tool_result = await _dispatch_tool(tool_name, tool_params)
+            except Exception as e:
+                logger.error(f"Tool error: {e}")
+                tool_result = f"Error calling {tool_name}: {e}"
 
-            messages.append({"role": "user", "content": tool_results})
+            # Send tool result back on the same thread
+            user_message = (
+                f"## Tool Result: {tool_name}\n\n"
+                f"{tool_result}\n\n"
+                "Continue your diagnosis. Respond with JSON."
+            )
+            continue
+
+        # Unknown action — maybe the agent used tool name as action
+        # e.g. {"action": "get_source_code", "params": {...}}
+        known_tools = {"get_source_code", "get_job_runbook", "get_full_log"}
+        if action in known_tools:
+            logger.info(f"Agent used tool name as action, treating as call_tool: {action}")
+            tool_params = data.get("params", {})
+            tool_reason = data.get("reason", "")
+            try:
+                tool_result = await _dispatch_tool(action, tool_params)
+            except Exception as e:
+                logger.error(f"Tool error: {e}")
+                tool_result = f"Error calling {action}: {e}"
+
+            user_message = (
+                f"## Tool Result: {action}\n\n"
+                f"{tool_result}\n\n"
+                "Continue your diagnosis. Respond with JSON."
+            )
+            continue
+
+        logger.warning(f"Unknown action in response: {action}")
+        user_message = (
+            "Your response had an unrecognized action. "
+            "Please respond with either {\"action\": \"call_tool\", ...} "
+            "or {\"action\": \"final_answer\", \"diagnosis\": {...}}."
+        )
 
     # Max steps reached — return what we have
     logger.warning(f"Agent hit max steps ({settings.agent_max_steps})")
