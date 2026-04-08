@@ -122,6 +122,44 @@ async def _get_latest_try_number(
     return latest["try_number"]
 
 
+def _json_log_to_text(data: dict) -> str:
+    """Convert Airflow v2 JSON log response to plain text.
+
+    The v2 API returns {"content": [{"event": "...", "timestamp": "...", ...}, ...]}.
+    We reconstruct a readable log from the event fields, including error_detail
+    tracebacks when present.
+    """
+    content = data.get("content", [])
+    lines = []
+    for entry in content:
+        event = entry.get("event", "")
+        timestamp = entry.get("timestamp", "")
+
+        # Format: [timestamp] event
+        if timestamp and event:
+            lines.append(f"[{timestamp}] {event}")
+        elif event:
+            lines.append(event)
+
+        # Expand error_detail into traceback lines
+        error_detail = entry.get("error_detail", [])
+        for err in error_detail:
+            frames = err.get("frames", [])
+            lines.append("Traceback (most recent call last):")
+            for frame in frames:
+                lines.append(
+                    f'  File "{frame.get("filename", "?")}", '
+                    f'line {frame.get("lineno", "?")}, '
+                    f'in {frame.get("name", "?")}'
+                )
+            exc_type = err.get("exc_type", "")
+            exc_value = err.get("exc_value", "")
+            if exc_type:
+                lines.append(f"{exc_type}: {exc_value}")
+
+    return "\n".join(lines)
+
+
 async def get_airflow_log(
     dag_id: str,
     dag_run_id: str,
@@ -153,11 +191,11 @@ async def get_airflow_log(
 
         resp = await client.get(
             url,
-            headers={**headers, "Accept": "text/plain"},
+            headers={**headers, "Accept": "application/json"},
             timeout=30.0,
         )
         resp.raise_for_status()
-        raw_log = resp.text
+        raw_log = _json_log_to_text(resp.json())
 
     return process_log(raw_log, source="airflow")
 
