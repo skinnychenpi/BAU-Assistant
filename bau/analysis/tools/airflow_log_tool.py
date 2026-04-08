@@ -3,10 +3,15 @@ Fetch task logs from Airflow REST API.
 
 Single responsibility: talks to Airflow only.
 Log pre-processing: extracts exception, stack trace, and last N lines.
+
+Auth flow: POST /auth/token → Bearer token for subsequent requests.
+Log fetch: GET /tries → find latest try_number → GET /logs/{try_number}
 """
 
 from __future__ import annotations
 
+import json
+import logging
 import re
 from dataclasses import dataclass, field
 
@@ -15,6 +20,8 @@ import httpx
 from bau.config import settings
 
 LOG_TAIL_LINES = 150
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -64,29 +71,89 @@ def process_log(raw_log: str, source: str = "airflow") -> ProcessedLog:
     )
 
 
+async def _get_token(client: httpx.AsyncClient) -> str:
+    """Authenticate with Airflow and return a JWT Bearer token."""
+    base = settings.airflow_base_url.rstrip("/")
+    token_url = f"{base}/auth/token"
+
+    payload = {
+        "username": settings.airflow_username,
+        "password": settings.airflow_password,
+    }
+
+    resp = await client.post(
+        token_url,
+        json=payload,
+        auth=(settings.airflow_username, settings.airflow_password),
+        headers={"Content-Type": "application/json"},
+        timeout=10.0,
+    )
+    resp.raise_for_status()
+
+    token_data = resp.json()
+    token = token_data.get("access_token")
+    if not token:
+        raise RuntimeError(f"Airflow token endpoint returned no access_token: {token_data}")
+    return token
+
+
+async def _get_latest_try_number(
+    client: httpx.AsyncClient,
+    headers: dict,
+    dag_id: str,
+    dag_run_id: str,
+    task_id: str,
+) -> int:
+    """Fetch task tries and return the highest try_number."""
+    base = settings.airflow_base_url.rstrip("/")
+    url = f"{base}/api/v2/dags/{dag_id}/dagRuns/{dag_run_id}/taskInstances/{task_id}/tries"
+
+    resp = await client.get(url, headers=headers, timeout=30.0)
+    resp.raise_for_status()
+
+    data = resp.json()
+    tries = data.get("task_instances", [])
+    if not tries:
+        raise RuntimeError(
+            f"No tries found for {dag_id}/{dag_run_id}/{task_id}"
+        )
+
+    latest = max(tries, key=lambda t: t["try_number"])
+    return latest["try_number"]
+
+
 async def get_airflow_log(
     dag_id: str,
     dag_run_id: str,
     task_id: str,
-    try_number: int = -1,
+    try_number: int | None = None,
 ) -> ProcessedLog:
     """
     Fetch task log from Airflow REST API and return processed result.
 
-    Args:
-        dag_id: The DAG identifier.
-        dag_run_id: The DAG run identifier.
-        task_id: The task identifier.
-        try_number: Which try to fetch (-1 = latest).
+    Auth: JWT token-based (POST /auth/token first).
+    If try_number is None, fetches the latest try automatically.
     """
     base = settings.airflow_base_url.rstrip("/")
-    url = f"{base}/api/v1/dags/{dag_id}/dagRuns/{dag_run_id}/taskInstances/{task_id}/logs/{try_number}"
 
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(verify=False) as client:
+        token = await _get_token(client)
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+        }
+
+        if try_number is None:
+            try_number = await _get_latest_try_number(
+                client, headers, dag_id, dag_run_id, task_id
+            )
+            logger.info(f"Latest try number for {dag_id}/{task_id}: {try_number}")
+
+        url = f"{base}/api/v2/dags/{dag_id}/dagRuns/{dag_run_id}/taskInstances/{task_id}/logs/{try_number}"
+
         resp = await client.get(
             url,
-            auth=(settings.airflow_username, settings.airflow_password),
-            headers={"Accept": "text/plain"},
+            headers={**headers, "Accept": "text/plain"},
             timeout=30.0,
         )
         resp.raise_for_status()
@@ -99,7 +166,7 @@ async def get_full_airflow_log(
     dag_id: str,
     dag_run_id: str,
     task_id: str,
-    try_number: int = -1,
+    try_number: int | None = None,
 ) -> str:
     """Fetch untruncated log from Airflow. Used as agent fallback tool."""
     result = await get_airflow_log(dag_id, dag_run_id, task_id, try_number)
