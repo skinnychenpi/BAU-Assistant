@@ -15,6 +15,7 @@ def sample_report() -> FailedTaskReport:
     return FailedTaskReport(
         dag_id="data_pltingestion_email_demo_linear_dag",
         dag_run_id="scheduled__2026-02-25T18:00:00+00:00",
+        dag_run_url=None,
         scheduled_time=datetime(2026, 2, 25, 18, 0, 0),
         start_date=datetime(2026, 2, 26, 1, 59, 49),
         duration=timedelta(hours=0, minutes=1, seconds=58),

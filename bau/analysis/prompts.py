@@ -96,7 +96,7 @@ def build_initial_user_message(
         f"- **DAG Run ID**: {report.dag_run_id}",
         f"- **Scheduled Time**: {report.scheduled_time}",
         f"- **Start Date**: {report.start_date}",
-        f"- **Duration**: {report.duration} (avg: {report.avg_duration})",
+        f"- **Duration**: {report.duration} (avg: {report.avg_duration or 'N/A'})",
         f"- **Overtime**: {'YES' if report.is_overtime else 'No'} "
         f"(ratio: {report.overtime_ratio:.2f})",
         f"- **Root Cause Tasks**: {', '.join(report.root_cause_tasks)}",

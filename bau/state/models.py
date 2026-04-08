@@ -14,13 +14,35 @@ from typing import Literal
 # ── Ingestion layer output ─────────────────────────────────────────────────────
 
 @dataclass
-class FailedTaskReport:
+class SchedulerNotFoundDAG:
+    """DAG ID listed in the 'Not Found in Scheduler' section of the alert email."""
+    dag_id: str
+
+
+@dataclass
+class RunningDAGReport:
+    """DAG run that is still running at the time of the alert email."""
     dag_id: str
     dag_run_id: str
+    dag_run_url: str | None
     scheduled_time: datetime
     start_date: datetime
     duration: timedelta
-    avg_duration: timedelta
+    avg_duration: timedelta | None     # None when avg is N/A
+    is_overtime: bool | None           # None when avg is N/A (unknown)
+    running_tasks: list[str]           # status == "running"
+    pending_tasks: list[str]           # status == "None" (not yet started)
+
+
+@dataclass
+class FailedTaskReport:
+    dag_id: str
+    dag_run_id: str
+    dag_run_url: str | None            # Airflow UI link
+    scheduled_time: datetime
+    start_date: datetime
+    duration: timedelta
+    avg_duration: timedelta | None     # None when avg is N/A
     is_overtime: bool
     failed_tasks: list[str]           # status == "failed"  → real root causes
     upstream_failed_tasks: list[str]  # status == "upstream_failed" → cascades
@@ -28,9 +50,17 @@ class FailedTaskReport:
 
     @property
     def overtime_ratio(self) -> float:
-        if self.avg_duration.total_seconds() == 0:
+        if self.avg_duration is None or self.avg_duration.total_seconds() == 0:
             return 0.0
         return self.duration.total_seconds() / self.avg_duration.total_seconds()
+
+
+@dataclass
+class EmailParseResult:
+    """Complete result from parsing an Airflow alert email."""
+    not_found_dags: list[SchedulerNotFoundDAG]
+    failed_reports: list[FailedTaskReport]
+    running_reports: list[RunningDAGReport]
 
 
 # ── Analysis layer output ──────────────────────────────────────────────────────

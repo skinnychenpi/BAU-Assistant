@@ -62,6 +62,7 @@ def build_report() -> FailedTaskReport:
     return FailedTaskReport(
         dag_id=tc["dag_id"],
         dag_run_id=tc["dag_run_id"],
+        dag_run_url=None,
         scheduled_time=tc["scheduled_time"],
         start_date=tc["start_date"],
         duration=tc["duration"],
