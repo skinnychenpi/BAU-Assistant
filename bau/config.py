@@ -65,6 +65,9 @@ class Settings(BaseSettings):
     # ── Agent behaviour ────────────────────────────────────────────────────────
     overtime_threshold: float = 1.5
 
+    # ── DAG monitoring ────────────────────────────────────────────────────────
+    dag_list_path: str = ""  # path to text file with one DAG ID per line
+
     # ── Knowledge ──────────────────────────────────────────────────────────────
     dag_config_path: str = str(Path(__file__).parent / "knowledge" / "dag_config.yaml")
 

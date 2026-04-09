@@ -1,7 +1,7 @@
 """
 Core data models for BAU-Assistant.
 These dataclasses flow through the entire pipeline:
-  Email → FailedTaskReport → DiagnosisResult → Action → pending_actions table
+  Ingestion → FailedTaskReport → DiagnosisResult → Action → pending_actions table
 """
 
 from __future__ import annotations
@@ -15,13 +15,13 @@ from typing import Literal
 
 @dataclass
 class SchedulerNotFoundDAG:
-    """DAG ID listed in the 'Not Found in Scheduler' section of the alert email."""
+    """DAG ID that does not exist in the Airflow scheduler."""
     dag_id: str
 
 
 @dataclass
 class RunningDAGReport:
-    """DAG run that is still running at the time of the alert email."""
+    """DAG run that is still running at the time of ingestion."""
     dag_id: str
     dag_run_id: str
     dag_run_url: str | None
@@ -56,8 +56,8 @@ class FailedTaskReport:
 
 
 @dataclass
-class EmailParseResult:
-    """Complete result from parsing an Airflow alert email."""
+class IngestionResult:
+    """Complete result from ingestion layer (Airflow API or email parsing)."""
     not_found_dags: list[SchedulerNotFoundDAG]
     failed_reports: list[FailedTaskReport]
     running_reports: list[RunningDAGReport]

@@ -24,7 +24,7 @@ from datetime import datetime, timedelta
 
 from bau.config import settings
 from bau.state.models import (
-    EmailParseResult,
+    IngestionResult,
     FailedTaskReport,
     RunningDAGReport,
     SchedulerNotFoundDAG,
@@ -90,9 +90,9 @@ def parse_email_body(body: str) -> list[FailedTaskReport]:
     return result.failed_reports
 
 
-def parse_email_full(body: str) -> EmailParseResult:
+def parse_email_full(body: str) -> IngestionResult:
     """
-    Parse raw email body into a full EmailParseResult containing:
+    Parse raw email body into a full IngestionResult containing:
     - DAGs not found in scheduler
     - Failed DAG run reports
     - Running DAG run reports
@@ -192,7 +192,7 @@ def parse_email_full(body: str) -> EmailParseResult:
                 )
             )
 
-    return EmailParseResult(
+    return IngestionResult(
         not_found_dags=not_found_dags,
         failed_reports=failed_reports,
         running_reports=running_reports,

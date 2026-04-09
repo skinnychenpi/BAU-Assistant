@@ -8,7 +8,7 @@ from datetime import datetime
 
 from bau.state.models import (
     DiagnosisResult,
-    EmailParseResult,
+    IngestionResult,
     FailedTaskReport,
     RunningDAGReport,
     SchedulerNotFoundDAG,
@@ -134,7 +134,7 @@ def format_running_report(report: RunningDAGReport) -> str:
     return "\n".join(lines)
 
 
-def format_full_summary(parse_result: EmailParseResult, diagnoses: list[DiagnosisResult] | None = None) -> str:
+def format_full_summary(parse_result: IngestionResult, diagnoses: list[DiagnosisResult] | None = None) -> str:
     """Format a complete summary report from an email parse result."""
     sections: list[str] = []
 

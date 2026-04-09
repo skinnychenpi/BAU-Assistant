@@ -2,11 +2,12 @@
 Orchestrator — the main pipeline loop.
 
 Guided approach:
-  1. Fetch emails → parse into FailedTaskReports
-  2. For each report, pre-fetch log + historical issues
-  3. Run agent diagnosis
-  4. Generate report and save actions
-  5. Transition to AWAIT_HUMAN
+  1. Query Airflow API → build IngestionResult
+  2. Report informational items (not-found DAGs, running DAGs)
+  3. For each failed report, pre-fetch log + historical issues
+  4. Run agent diagnosis
+  5. Generate report and save actions
+  6. Transition to AWAIT_HUMAN
 
 Can be triggered manually via CLI or on schedule via APScheduler.
 """
@@ -22,8 +23,15 @@ from bau.analysis.agent import diagnose
 from bau.analysis.tools.history_tool import get_historical_issues
 from bau.analysis.tools.log_router import get_task_log
 from bau.config import settings
-from bau.report.generator import format_report_text, generate_report_payload
-from bau.state.models import AgentRun
+from bau.ingestion.airflow_client import fetch_dag_status
+from bau.report.generator import (
+    format_full_summary,
+    format_not_found_report,
+    format_report_text,
+    format_running_report,
+    generate_report_payload,
+)
+from bau.state.models import AgentRun, IngestionResult
 from bau.state.store import (
     create_run,
     init_db,
@@ -35,13 +43,18 @@ from bau.state.store import (
 logger = logging.getLogger(__name__)
 
 
-async def run_pipeline(reports=None) -> str:
+async def run_pipeline(
+    dag_ids: list[str] | None = None,
+    grass_date: str | None = None,
+    ingestion_result: IngestionResult | None = None,
+) -> str:
     """
     Run the full BAU diagnosis pipeline.
 
     Args:
-        reports: Optional pre-parsed FailedTaskReports (for testing).
-                 If None, will fetch from Gmail (not yet implemented).
+        dag_ids: Optional list of DAG IDs to check. If None, loads from config.
+        grass_date: Date to check (YYYY-MM-DD). Defaults to today (SGT).
+        ingestion_result: Optional pre-built IngestionResult (for testing).
 
     Returns:
         The run_id for this pipeline execution.
@@ -59,28 +72,31 @@ async def run_pipeline(reports=None) -> str:
     try:
         # ── FETCH ─────────────────────────────────────────────────────
         update_run_status(run_id, "FETCH")
-        logger.info(f"[{run_id[:8]}] FETCH — getting failure reports")
+        logger.info(f"[{run_id[:8]}] FETCH — querying Airflow API")
 
-        if reports is None:
-            # TODO: Implement Gmail fetching
-            # from bau.ingestion.gmail_client import fetch_emails
-            # from bau.ingestion.email_parser import parse_email_body
-            # emails = fetch_emails()
-            # reports = []
-            # for email in emails:
-            #     reports.extend(parse_email_body(email.body))
-            logger.info("No reports provided and Gmail client not yet implemented")
-            update_run_status(run_id, "DONE")
-            return run_id
+        if ingestion_result is None:
+            ingestion_result = await fetch_dag_status(
+                dag_ids=dag_ids, grass_date=grass_date
+            )
 
-        if not reports:
-            logger.info(f"[{run_id[:8]}] No failures found — done")
+        # ── REPORT informational items ────────────────────────────────
+        if ingestion_result.not_found_dags:
+            report_text = format_not_found_report(ingestion_result.not_found_dags)
+            logger.info(f"\n{report_text}")
+
+        for running in ingestion_result.running_reports:
+            report_text = format_running_report(running)
+            logger.info(f"\n{report_text}")
+
+        if not ingestion_result.failed_reports:
+            logger.info(f"[{run_id[:8]}] No failed DAG runs found — done")
             update_run_status(run_id, "DONE")
             return run_id
 
         # ── ANALYZE ───────────────────────────────────────────────────
         update_run_status(run_id, "ANALYZE")
-        logger.info(f"[{run_id[:8]}] ANALYZE — diagnosing {len(reports)} report(s)")
+        reports = ingestion_result.failed_reports
+        logger.info(f"[{run_id[:8]}] ANALYZE — diagnosing {len(reports)} failed report(s)")
 
         for report in reports:
             logger.info(f"[{run_id[:8]}] Diagnosing {report.dag_id} / {report.root_cause_tasks}")

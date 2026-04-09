@@ -4,13 +4,12 @@ Fetch task logs from Airflow REST API.
 Single responsibility: talks to Airflow only.
 Log pre-processing: extracts exception, stack trace, and last N lines.
 
-Auth flow: POST /auth/token → Bearer token for subsequent requests.
+Auth: uses shared auth from bau.ingestion.airflow_auth.
 Log fetch: GET /tries → find latest try_number → GET /logs/{try_number}
 """
 
 from __future__ import annotations
 
-import json
 import logging
 import re
 from dataclasses import dataclass, field
@@ -18,6 +17,7 @@ from dataclasses import dataclass, field
 import httpx
 
 from bau.config import settings
+from bau.ingestion.airflow_auth import api_get, get_token, make_auth_headers
 
 LOG_TAIL_LINES = 150
 
@@ -71,32 +71,6 @@ def process_log(raw_log: str, source: str = "airflow") -> ProcessedLog:
     )
 
 
-async def _get_token(client: httpx.AsyncClient) -> str:
-    """Authenticate with Airflow and return a JWT Bearer token."""
-    base = settings.airflow_base_url.rstrip("/")
-    token_url = f"{base}/auth/token"
-
-    payload = {
-        "username": settings.airflow_username,
-        "password": settings.airflow_password,
-    }
-
-    resp = await client.post(
-        token_url,
-        json=payload,
-        auth=(settings.airflow_username, settings.airflow_password),
-        headers={"Content-Type": "application/json"},
-        timeout=10.0,
-    )
-    resp.raise_for_status()
-
-    token_data = resp.json()
-    token = token_data.get("access_token")
-    if not token:
-        raise RuntimeError(f"Airflow token endpoint returned no access_token: {token_data}")
-    return token
-
-
 async def _get_latest_try_number(
     client: httpx.AsyncClient,
     headers: dict,
@@ -105,18 +79,15 @@ async def _get_latest_try_number(
     task_id: str,
 ) -> int:
     """Fetch task tries and return the highest try_number."""
-    base = settings.airflow_base_url.rstrip("/")
-    url = f"{base}/api/v2/dags/{dag_id}/dagRuns/{dag_run_id}/taskInstances/{task_id}/tries"
+    endpoint = f"api/v2/dags/{dag_id}/dagRuns/{dag_run_id}/taskInstances/{task_id}/tries"
+    data = await api_get(client, headers, endpoint)
 
-    resp = await client.get(url, headers=headers, timeout=30.0)
-    resp.raise_for_status()
+    if not data:
+        raise RuntimeError(f"Failed to fetch tries for {dag_id}/{dag_run_id}/{task_id}")
 
-    data = resp.json()
     tries = data.get("task_instances", [])
     if not tries:
-        raise RuntimeError(
-            f"No tries found for {dag_id}/{dag_run_id}/{task_id}"
-        )
+        raise RuntimeError(f"No tries found for {dag_id}/{dag_run_id}/{task_id}")
 
     latest = max(tries, key=lambda t: t["try_number"])
     return latest["try_number"]
@@ -175,11 +146,8 @@ async def get_airflow_log(
     base = settings.airflow_base_url.rstrip("/")
 
     async with httpx.AsyncClient(verify=False) as client:
-        token = await _get_token(client)
-        headers = {
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/json",
-        }
+        token = await get_token(client)
+        headers = make_auth_headers(token)
 
         if try_number is None:
             try_number = await _get_latest_try_number(
