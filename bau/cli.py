@@ -37,10 +37,23 @@ logging.basicConfig(
 
 
 @app.command()
-def run():
+def run(
+    grass_date: str = typer.Option(
+        None,
+        "--grass-date",
+        "-d",
+        help="Grass date to check (YYYY-MM-DD). Defaults to yesterday (SGT).",
+    ),
+):
     """Trigger the full diagnosis pipeline."""
-    console.print("[bold]Starting BAU pipeline...[/bold]")
-    run_id = asyncio.run(run_pipeline())
+    from datetime import datetime, timedelta, timezone
+
+    if grass_date is None:
+        sgt = timezone(timedelta(hours=8))
+        grass_date = (datetime.now(sgt) - timedelta(days=1)).strftime("%Y-%m-%d")
+
+    console.print(f"[bold]Starting BAU pipeline for grass_date={grass_date}...[/bold]")
+    run_id = asyncio.run(run_pipeline(grass_date=grass_date))
     console.print(f"[green]Pipeline complete.[/green] Run ID: {run_id}")
 
 
@@ -119,3 +132,7 @@ def serve(
         scheduler.start()
     except (KeyboardInterrupt, SystemExit):
         console.print("[dim]Service stopped.[/dim]")
+
+
+if __name__ == "__main__":
+    app()
