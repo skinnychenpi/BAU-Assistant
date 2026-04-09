@@ -6,6 +6,8 @@ Usage:
     python3 scripts/test_ingestion.py 2026-04-08       # specific grass_date
 """
 
+from __future__ import annotations
+
 import asyncio
 import sys
 
