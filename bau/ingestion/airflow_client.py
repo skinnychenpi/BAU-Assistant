@@ -246,19 +246,19 @@ async def fetch_dag_status(
                         )
                     )
 
-                elif state == "failed":
+                # Check for failed tasks regardless of DAG run state.
+                # A DAG run can be "success" overall but still contain
+                # individual tasks that failed (e.g. non-blocking branches).
+                failed_tasks = [
+                    t["task_id"] for t in task_instances if t.get("state") == "failed"
+                ]
+                upstream_failed = [
+                    t["task_id"] for t in task_instances
+                    if t.get("state") == "upstream_failed"
+                ]
+
+                if failed_tasks and state != "running":
                     duration = timedelta(seconds=duration_seconds)
-
-                    failed_tasks = [
-                        t["task_id"] for t in task_instances if t.get("state") == "failed"
-                    ]
-                    upstream_failed = [
-                        t["task_id"] for t in task_instances
-                        if t.get("state") == "upstream_failed"
-                    ]
-
-                    if not failed_tasks:
-                        continue
 
                     root_cause_tasks = [
                         t for t in failed_tasks if t not in upstream_failed

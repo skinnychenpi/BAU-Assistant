@@ -241,3 +241,48 @@ async def test_fetch_dag_status_all_success_skipped():
     assert len(result.not_found_dags) == 0
     assert len(result.failed_reports) == 0
     assert len(result.running_reports) == 0
+
+
+@pytest.mark.asyncio
+async def test_fetch_dag_status_success_run_with_failed_task():
+    """Test that a DAG run with state=success but a failed task is still reported."""
+
+    async def mock_api_get(client, headers, endpoint):
+        if endpoint == "api/v2/dags/mixed_dag":
+            return {"dag_id": "mixed_dag"}
+        if "logical_date" in endpoint:
+            return {
+                "dag_runs": [
+                    {
+                        "dag_id": "mixed_dag",
+                        "dag_run_id": "scheduled__2026-04-01T00:00:00+00:00",
+                        "state": "success",
+                        "start_date": "2026-04-01T08:00:00Z",
+                        "duration": 300,
+                    },
+                ]
+            }
+        if "taskInstances" in endpoint:
+            return {
+                "task_instances": [
+                    {"task_id": "step1", "state": "success"},
+                    {"task_id": "step2", "state": "failed"},
+                    {"task_id": "step3", "state": "success"},
+                ]
+            }
+        if "order_by=-end_date" in endpoint:
+            return {"dag_runs": []}
+        return None
+
+    with patch("bau.ingestion.airflow_client.get_token", new_callable=AsyncMock, return_value="fake-token"):
+        with patch("bau.ingestion.airflow_client.api_get", side_effect=mock_api_get):
+            result = await fetch_dag_status(
+                dag_ids=["mixed_dag"],
+                grass_date="2026-04-01",
+            )
+
+    assert len(result.failed_reports) == 1
+    report = result.failed_reports[0]
+    assert report.dag_id == "mixed_dag"
+    assert report.failed_tasks == ["step2"]
+    assert report.root_cause_tasks == ["step2"]
